@@ -8,10 +8,11 @@ import GameDisplay from './GameDisplay.jsx';
 import DailyDashboard from './DailyDashboard.jsx';
 import { appendHistory, dailyGameIds, localDateKey, readHistory } from './daily.js';
 import { changeTenDistractor, createTenDistractors } from './tenDistraction.js';
+import { getGamePacing, getMeterPosition } from './gamePacing.js';
 
 const RPS = ['グー', 'チョキ', 'パー'];
-const DEFAULT_SETTINGS = { players: 2, pace: 'normal', sound: true, room: 'main', rpsMode: 'random' };
-const TIMEOUT = { rps: 16000, quiz: 22000, count: 15000, bigger: 15000, red: 2500, light: 4500, sound: 5500, team: 6000, memory: 20000 };
+const DEFAULT_SETTINGS = { players: 2, pace: 'slow', sound: true, room: 'main', rpsMode: 'win' };
+const TIMEOUT = { rps: 24000, quiz: 30000, bigger: 28000, memory: 30000 };
 const AUTO_GAMES = new Set(['rps', 'quiz', 'bigger', 'memory', 'light', 'sound', 'count']);
 function quizOrder(previous = [], difficulty = 'normal') {
   const order = shuffle(getQuizPool(difficulty));
@@ -108,10 +109,6 @@ export default function App() {
   const [settings, setSettings] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem('button-game-settings') || '{}');
-      if (!localStorage.getItem('button-game-settings-v2')) {
-        if (saved.rpsMode === 'win') saved.rpsMode = 'random';
-        localStorage.setItem('button-game-settings-v2', '1');
-      }
       return { ...DEFAULT_SETTINGS, ...saved };
     } catch { return DEFAULT_SETTINGS; }
   });
@@ -131,6 +128,8 @@ export default function App() {
   const dailyRef = useRef(null);
   const timers = useRef([]);
   const tenGeneration = useRef(0);
+  const countdownTarget = useRef(null);
+  const countdownRef = useRef(null);
   const room = (settings.room || 'main').trim() || 'main';
   const controllerMode = new URLSearchParams(location.search).get('controller') === '1';
   useEffect(() => { try { localStorage.setItem('button-game-settings', JSON.stringify(settings)); } catch {} if (!settings.sound) stopAudio(); }, [settings]);
@@ -169,7 +168,7 @@ export default function App() {
     }
   }, [sound, setGameState]);
   const beginTenMeasurement = useCallback(generation => {
-    if (generation !== tenGeneration.current || selectedRef.current !== 'ten' || stateRef.current?.phase !== 'preparing') return;
+    if (generation !== tenGeneration.current || selectedRef.current !== 'ten' || stateRef.current?.phase !== 'countdown') return;
     const startAt = performance.now();
     const difficulty = dailyRef.current?.difficulty || settings.pace;
     setGameState(s => ({ ...s, phase: 'play', active: true, startAt, prepCount: null, tenCards: createTenDistractors(difficulty) }));
@@ -177,21 +176,16 @@ export default function App() {
       const changeCard = () => {
         if (generation !== tenGeneration.current || stateRef.current?.phase !== 'play') return;
         setGameState(s => ({ ...s, tenCards: changeTenDistractor(s.tenCards) }));
-        schedule(changeCard, 650 + Math.random() * 1550);
+        schedule(changeCard, getGamePacing(difficulty).tenDistractorChangeMs + Math.random() * 900);
       };
-      schedule(changeCard, 800 + Math.random() * 1100);
+      schedule(changeCard, getGamePacing(difficulty).tenDistractorChangeMs);
     }
     schedule(() => { if (generation === tenGeneration.current && stateRef.current?.phase === 'play') finish('じっくり数えたね', '20秒たったので、次へ進もう。'); }, 20000);
   }, [finish, setGameState, settings.pace]);
   const startTenVisual = useCallback(() => {
     if (selectedRef.current !== 'ten' || stateRef.current?.phase !== 'preparing') return;
-    clearTimers();
-    const generation = tenGeneration.current;
-    setGameState(s => ({ ...s, prepCount: 3, showTenFallback: false }));
-    schedule(() => { if (generation === tenGeneration.current && stateRef.current?.phase === 'preparing') setGameState(s => ({ ...s, prepCount: 2 })); }, 450);
-    schedule(() => { if (generation === tenGeneration.current && stateRef.current?.phase === 'preparing') setGameState(s => ({ ...s, prepCount: 1 })); }, 900);
-    schedule(() => beginTenMeasurement(generation), 1350);
-  }, [beginTenMeasurement, setGameState]);
+    countdownRef.current?.({ kind: 'ten-measure', id: 'ten' });
+  }, []);
   const beginRound = useCallback((id, index, previous = {}, reuseRound = false) => {
     clearTimers();
     window.scrollTo(0, 0);
@@ -200,13 +194,18 @@ export default function App() {
     const round = reuseRound ? { ...previous, count: 0, currentItems: [], feint: false } : newRound(id, { index, difficulty, rpsMode: settings.rpsMode, usedKinds: stateRef.current?.usedKinds || [], usedDirections: stateRef.current?.usedDirections || [], ...(id === 'memory' ? { previousSequence: previous.sequence } : {}), ...(id === 'quiz' ? { question: stateRef.current?.quizOrder?.[index] ?? index % QUIZ.length } : {}) });
     if (id === 'quiz' && !reuseRound) round.options = shuffle(QUIZ[round.question].answers);
     const phase = id === 'memory' ? 'watch' : id === 'ten' ? 'preparing' : 'play';
-    setGameState(s => ({ ...s, phase, index, round, active: false, startAt: null, prepCount: null, showTenFallback: false, tenCards: [], cueAt: null, presses: [], watchIndex: id === 'memory' ? 0 : -1, inputIndex: 0, feedback: null, feedbackRemaining: null, redIndex: 0, redPressedIndices: [], redPoints: 0, redCue: null, redRemainingMs: id === 'red' ? round.sequence?.reduce((sum, item) => sum + item.durationMs, 0) : null, score: id === 'red' && reuseRound ? 0 : s.score, usedKinds: id === 'bigger' && !reuseRound ? [...(s.usedKinds || []), round.comparison?.kind].filter(Boolean) : s.usedKinds, usedDirections: id === 'bigger' && !reuseRound ? [...(s.usedDirections || []), round.comparison?.direction].filter(Boolean) : s.usedDirections }));
-    const pace = difficulty === 'slow' ? 1.55 : difficulty === 'challenge' ? .72 : 1;
+    setGameState(s => ({ ...s, phase, index, round, active: false, startAt: null, prepCount: null, showTenFallback: false, tenCards: [], cueAt: null, presses: [], watchIndex: id === 'memory' ? 0 : -1, inputIndex: 0, zoomStage: 0, feedback: null, feedbackRemaining: null, redIndex: 0, redPressedIndices: [], redPoints: 0, redCue: null, redRemainingMs: id === 'red' ? round.sequence?.reduce((sum, item) => sum + item.durationMs, 0) : null, score: id === 'red' && reuseRound ? 0 : s.score, usedKinds: id === 'bigger' && !reuseRound ? [...(s.usedKinds || []), round.comparison?.kind].filter(Boolean) : s.usedKinds, usedDirections: id === 'bigger' && !reuseRound ? [...(s.usedDirections || []), round.comparison?.direction].filter(Boolean) : s.usedDirections }));
+    const pacing = getGamePacing(difficulty);
+    if (id === 'quiz') {
+      schedule(() => setGameState(s => s?.phase === 'play' ? ({ ...s, zoomStage: 1 }) : s), pacing.stimulusMs);
+      // Let the middle view settle, then hold it for a full stimulus interval.
+      schedule(() => setGameState(s => s?.phase === 'play' ? ({ ...s, zoomStage: 2 }) : s), pacing.stimulusMs * 2 + 1100);
+    }
     if (id === 'ten') {
       const generation = tenGeneration.current;
       if (settings.sound) {
         const fallbackAt = performance.now() + 30000;
-        speak('動く数字に惑わされず、10秒と思ったら押してね。用意、スタート', { onEnd: () => beginTenMeasurement(generation), onError: () => { if (generation === tenGeneration.current) startTenVisual(); } });
+        speak('動く数字に惑わされず、心の中で10秒を数えてね。これから、3、2、1を表示します。', { onEnd: () => { if (generation === tenGeneration.current) startTenVisual(); }, onError: () => { if (generation === tenGeneration.current) startTenVisual(); } });
         const checkSpeech = () => {
           if (generation !== tenGeneration.current || stateRef.current?.phase !== 'preparing') return;
           if (performance.now() >= fallbackAt) { startTenVisual(); return; }
@@ -222,23 +221,22 @@ export default function App() {
     if (id === 'light') {
       const feints = round.feintCount ?? 1;
       for (let i = 0; i < feints; i++) {
-        const at = round.delay * pace * (.25 + i * .45 / feints);
+        const at = i * (pacing.stimulusMs + 400);
         schedule(() => setGameState(s => ({ ...s, round: { ...s.round, feint: true } })), at);
-        schedule(() => setGameState(s => ({ ...s, round: { ...s.round, feint: false } })), at + 190 * pace);
+        schedule(() => setGameState(s => ({ ...s, round: { ...s.round, feint: false } })), at + pacing.stimulusMs);
       }
-      schedule(() => { const cueAt = performance.now(); setGameState(s => ({ ...s, active: true, cueAt })); if (settings.sound) beep(710); schedule(() => finish('次もやってみよう', '合図に間に合わなくても大丈夫。'), 3600 * pace); }, round.delay * pace);
+      schedule(() => { const cueAt = performance.now(); setGameState(s => ({ ...s, active: true, cueAt })); if (settings.sound) beep(710); schedule(() => finish('次もやってみよう', '合図に間に合わなくても大丈夫。'), pacing.reactionWindowMs); }, feints * (pacing.stimulusMs + 400) + round.delay);
     }
-    if (id === 'sound') { if (settings.sound) { unlockAudio(); startMelody(); } schedule(() => { stopAudio(); const cueAt = performance.now(); setGameState(s => ({ ...s, active: true, cueAt })); schedule(() => finish('次もやってみよう', '音が止まったら押してね。'), 3600 * pace); }, round.delay * pace); }
-    if (id === 'team') schedule(() => { const startAt = Date.now(); setGameState(s => ({ ...s, active: true, startAt })); const ticker = setInterval(() => setGameState(s => s?.phase === 'play' && s.active ? ({ ...s, meterPosition: (Math.sin((Date.now() - startAt) / 650) + 1) / 2 }) : s), 40); timers.current.push(ticker); if (settings.sound) beep(700); schedule(() => finish('いいチーム！', 'また中央をねらってみよう。'), 6000 * pace); }, 1200 * pace);
+    if (id === 'sound') { if (settings.sound) { unlockAudio(); startMelody(); } schedule(() => { stopAudio(); const cueAt = performance.now(); setGameState(s => ({ ...s, active: true, cueAt })); schedule(() => finish('次もやってみよう', '音が止まったら押してね。'), pacing.reactionWindowMs); }, round.delay); }
+    if (id === 'team') schedule(() => { const startAt = Date.now(); setGameState(s => ({ ...s, active: true, startAt })); const ticker = setInterval(() => setGameState(s => s?.phase === 'play' && s.active ? ({ ...s, meterPosition: getMeterPosition(Date.now() - startAt, difficulty) }) : s), 40); timers.current.push(ticker); if (settings.sound) beep(700); schedule(() => finish('いいチーム！', 'また中央をねらってみよう。'), 2 * (4 * pacing.meterTravelMs + 2 * pacing.meterCenterHoldMs)); }, pacing.stimulusMs);
     if (id === 'count') {
-      const base = difficulty === 'slow' ? 1200 : difficulty === 'challenge' ? 630 : 880;
       let elapsed = 0;
       for (let i = 0; i < round.steps.length; i++) {
         const step = round.steps[i];
-        elapsed += base + [-80, 90, -30, 120, -70, 70, 0, 100, -50][i % 9];
+        elapsed += pacing.countStepMs;
         schedule(() => {
           setGameState(s => ({ ...s, round: { ...s.round, count: step.targetCount, currentItems: step.items, stepIndex: i } }));
-          if (i === round.steps.length - 1) schedule(() => finish('いい挑戦！', `${round.targetCount}個になったら押してみよう。`), 350);
+          if (i === round.steps.length - 1) schedule(() => finish('いい挑戦！', `${round.targetCount}個になったら押してみよう。`), pacing.countStepMs);
         }, elapsed);
       }
     }
@@ -251,22 +249,54 @@ export default function App() {
       timers.current.push(ticker);
       schedule(() => { const result = redScore(round.sequence, stateRef.current?.redPressedIndices || []); clearTimers(); setGameState(s => ({ ...s, phase: 'summary', active: false, score: result.points, redResult: result, redRemainingMs: 0 })); completeDailyGame('red', result.points); }, totalMs);
     }
-    if (id === 'memory') round.sequence.forEach((_, i) => schedule(() => { setGameState(s => ({ ...s, watchIndex: i })); if (settings.sound) beep(350 + round.sequence[i] * 100); }, i * 900 * pace));
-    if (id === 'memory') schedule(() => setGameState(s => ({ ...s, phase: 'play', watchIndex: -1 })), round.sequence.length * 900 * pace);
-    if (['rps', 'quiz', 'bigger', 'memory'].includes(id)) schedule(() => finish('ゆっくりで大丈夫', '次の問題に進もう。'), (TIMEOUT[id] || 15000) * pace + (id === 'memory' ? round.sequence.length * 1100 * pace : 0));
+    if (id === 'memory') round.sequence.forEach((_, i) => schedule(() => { setGameState(s => ({ ...s, watchIndex: i })); if (settings.sound) beep(350 + round.sequence[i] * 100); }, i * pacing.memoryFlashMs));
+    if (id === 'memory') schedule(() => setGameState(s => ({ ...s, phase: 'play', watchIndex: -1 })), round.sequence.length * pacing.memoryFlashMs);
+    if (['rps', 'quiz', 'bigger', 'memory'].includes(id)) schedule(() => finish('ゆっくりで大丈夫', '次の問題に進もう。'), TIMEOUT[id] + (id === 'memory' ? round.sequence.length * pacing.memoryFlashMs : 0));
   }, [finish, setGameState, setDailySession, completeDailyGame, beginTenMeasurement, startTenVisual, settings.pace, settings.sound, settings.rpsMode]);
-  const start = useCallback(() => { const id = selectedRef.current; if (!id) return; unlockAudio(); beginRound(id, 0); }, [beginRound]);
-  const next = useCallback(() => { const s = stateRef.current; const id = selectedRef.current; if (!s || !id) return; const total = id === 'red' ? 1 : getTotalRounds(id); window.scrollTo(0, 0); if (s.index + 1 >= total) { clearTimers(); setGameState(x => ({ ...x, phase: 'summary' })); completeDailyGame(id, s.score); } else beginRound(id, s.index + 1, s.round); }, [beginRound, setGameState, completeDailyGame]);
+  const launchCountdown = useCallback(target => {
+    if (!target?.id || target.id !== selectedRef.current) return;
+    clearTimers();
+    const generation = tenGeneration.current;
+    countdownTarget.current = target;
+    window.scrollTo(0, 0);
+    setGameState(s => ({ ...s, phase: 'countdown', countdown: 3, active: false }));
+    const beat = getGamePacing(dailyRef.current?.difficulty || settings.pace).countdownBeatMs;
+    for (const [number, delay] of [[2, beat], [1, beat * 2]]) {
+      schedule(() => {
+        if (stateRef.current?.phase === 'countdown' && countdownTarget.current === target) setGameState(s => ({ ...s, countdown: number }));
+      }, delay);
+    }
+    schedule(() => {
+      if (stateRef.current?.phase !== 'countdown' || countdownTarget.current !== target) return;
+      countdownTarget.current = null;
+      if (target.kind === 'ten-measure') beginTenMeasurement(generation);
+      else if (target.kind === 'next') nextRef.current?.();
+      else beginRound(target.id, target.index, target.previous, target.reuseRound);
+    }, beat * 3);
+  }, [beginRound, beginTenMeasurement, setGameState, settings.pace]);
+  countdownRef.current = launchCountdown;
+  const start = useCallback(() => { const id = selectedRef.current; if (!id) return; unlockAudio(); if (id === 'ten') beginRound(id, 0); else launchCountdown({ kind: 'round', id, index: 0, previous: {}, reuseRound: false }); }, [beginRound, launchCountdown]);
+  const next = useCallback(() => { const s = stateRef.current; const id = selectedRef.current; if (!s || !id) return; const total = id === 'red' ? 1 : getTotalRounds(id); window.scrollTo(0, 0); if (s.index + 1 >= total) { clearTimers(); setGameState(x => ({ ...x, phase: 'summary' })); completeDailyGame(id, s.score); } else if (id === 'ten') beginRound(id, s.index + 1, s.round); else if (id === 'team') launchCountdown({ kind: 'round', id, index: s.index + 1, previous: s.round, reuseRound: false }); else beginRound(id, s.index + 1, s.round); }, [beginRound, launchCountdown, setGameState, completeDailyGame]);
   nextRef.current = next;
-  const restart = useCallback(() => { clearTimers(); window.scrollTo(0, 0); setGameState(s => ({ ...s, phase: 'intro', index: 0, score: 0, round: {}, feedback: null, active: false, presses: [], usedKinds: [], usedDirections: [], quizOrder: quizOrder(s.quizOrder, dailyRef.current?.difficulty || settings.pace) })); }, [setGameState, settings.pace]);
-  const replay = useCallback(() => { const id = selectedRef.current; if (!id) return; clearTimers(); window.scrollTo(0, 0); setGameState(s => ({ ...s, phase: 'intro', index: 0, score: 0, round: {}, feedback: null, active: false, presses: [], usedKinds: [], usedDirections: [], quizOrder: quizOrder(s.quizOrder, settings.pace) })); beginRound(id, 0); }, [beginRound, setGameState, settings.pace]);
-  const openGame = useCallback(id => { clearTimers(); window.scrollTo(0, 0); unlockAudio(); selectedRef.current = id; setSelected(id); setGameState({ phase: 'intro', index: 0, score: 0, round: {}, feedback: null, active: false, presses: [], usedKinds: [], usedDirections: [], quizOrder: quizOrder([], dailyRef.current?.difficulty || settings.pace) }); if (settings.sound) speak(id === 'ten' ? '動く数字に惑わされず、10秒と思ったら押してね。' : GAMES.find(g => g.id === id)?.guide || ''); }, [setGameState, settings.sound, settings.pace]);
+  const restart = useCallback(() => { clearTimers(); countdownTarget.current = null; window.scrollTo(0, 0); setGameState(s => ({ ...s, phase: 'intro', index: 0, score: 0, round: {}, feedback: null, active: false, presses: [], usedKinds: [], usedDirections: [], quizOrder: quizOrder(s.quizOrder, dailyRef.current?.difficulty || settings.pace) })); }, [setGameState, settings.pace]);
+  const replay = useCallback(() => { const id = selectedRef.current; if (!id) return; clearTimers(); window.scrollTo(0, 0); setGameState(s => ({ ...s, phase: 'intro', index: 0, score: 0, round: {}, feedback: null, active: false, presses: [], usedKinds: [], usedDirections: [], quizOrder: quizOrder(s.quizOrder, settings.pace) })); if (id === 'ten') beginRound(id, 0); else launchCountdown({ kind: 'round', id, index: 0, previous: {}, reuseRound: false }); }, [beginRound, launchCountdown, setGameState, settings.pace]);
+  const openGame = useCallback(id => { clearTimers(); countdownTarget.current = null; window.scrollTo(0, 0); unlockAudio(); selectedRef.current = id; setSelected(id); setGameState({ phase: 'intro', index: 0, score: 0, round: {}, feedback: null, active: false, presses: [], usedKinds: [], usedDirections: [], quizOrder: quizOrder([], dailyRef.current?.difficulty || settings.pace) }); if (settings.sound) speak(id === 'ten' ? '動く数字に惑わされず、10秒と思ったら押してね。' : GAMES.find(g => g.id === id)?.guide || ''); }, [setGameState, settings.sound, settings.pace]);
   const startDaily = useCallback(() => { const date = localDateKey(); const gameIds = dailyGameIds(date); const session = { id: `${date}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, date, difficulty: settings.pace, gameIds, position: 0, games: [], startedAt: Date.now(), gameStartedAt: null }; setDailySession(session); setDashboardRecord(null); setDashboardSaveFailed(false); setDashboardOpen(false); openGame(gameIds[0]); }, [openGame, setDailySession, settings.pace]);
   const openIndividualGame = useCallback(id => { setDailySession(null); setDashboardRecord(null); openGame(id); }, [openGame, setDailySession]);
-  const back = useCallback(() => { clearTimers(); window.scrollTo(0, 0); selectedRef.current = null; setSelected(null); setGameState(null); setDailySession(null); }, [setGameState, setDailySession]);
+  const back = useCallback(() => { clearTimers(); countdownTarget.current = null; window.scrollTo(0, 0); selectedRef.current = null; setSelected(null); setGameState(null); setDailySession(null); }, [setGameState, setDailySession]);
   const nextDailyGame = useCallback(() => { const session = dailyRef.current; if (!session || session.games.length !== session.position + 1) return; if (session.position === 2) { clearTimers(); selectedRef.current = null; setSelected(null); setGameState(null); setDashboardOpen(true); setDashboardRecord(session.record || null); setDailySession(null); window.scrollTo(0, 0); return; } const nextPosition = session.position + 1; setDailySession({ ...session, position: nextPosition, gameStartedAt: null }); openGame(session.gameIds[nextPosition]); }, [openGame, setDailySession, setGameState]);
   const closeDashboard = useCallback(() => { setDashboardOpen(false); setDashboardRecord(null); window.scrollTo(0, 0); }, []);
-  const resume = useCallback(() => { const s = stateRef.current; if (s?.phase !== 'paused') return; if (s.pausedFrom === 'feedback') next(); else beginRound(selectedRef.current, s.index, s.round, true); }, [next, beginRound]);
+  const resume = useCallback(() => {
+    const s = stateRef.current;
+    if (s?.phase !== 'paused') return;
+    const id = selectedRef.current;
+    if (s.pausedFrom === 'countdown' && countdownTarget.current) launchCountdown(countdownTarget.current);
+    else if (s.pausedFrom === 'feedback') {
+      if (['ten', 'team'].includes(id) || s.index + 1 >= (id === 'red' ? 1 : getTotalRounds(id))) next();
+      else launchCountdown({ kind: 'next', id });
+    } else if (id === 'ten') beginRound(id, s.index, s.round, true);
+    else launchCountdown({ kind: 'round', id, index: s.index, previous: s.round, reuseRound: true });
+  }, [next, beginRound, launchCountdown]);
   const press = useCallback((button, event = {}) => {
     if (setup && !controllerMode) { setTestSignal(button); return; }
     const s = stateRef.current; const id = selectedRef.current;
@@ -279,9 +309,9 @@ export default function App() {
     if (s.phase !== 'play') return;
     if (id === 'ten') { const grade = tenGrade(performance.now() - s.startAt); finish(grade.phrase, `${grade.seconds}秒！ 10秒との差は ${grade.difference}秒。`, grade.points); return; }
     if (id === 'rps') { if (button > 2) return; const right = rpsResult(s.round.opponent, s.round.instruction, button); finish(right ? '大正解！' : '次も楽しもう', `答えは ${RPS[rpsAnswer(s.round.opponent, s.round.instruction)]}。`, right ? 20 : 0); return; }
-    if (id === 'team') { if (!s.active || button >= settings.players || s.presses.some(x => x.button === button)) return; const at = Date.now(); const position = (Math.sin((at - s.startAt) / 650) + 1) / 2; const presses = [...s.presses, { button, at, position }]; if (presses.length >= settings.players) { const result = teamScore(presses, settings.players); finish(result.points === 100 ? '100点！ ぴったり！' : result.points >= 92 ? 'すごいチーム！' : 'みんなで100点に挑戦！', '中央に近いほど高得点。', result.points); } else setGameState(x => ({ ...x, presses })); return; }
-    if (id === 'light' || id === 'sound') { if (!s.active || s.cueAt == null) { finish(id === 'light' ? 'おっと、まだだったね' : 'おっと、まだ音が鳴っていたね', '合図を待ってみよう。'); return; } const difficulty = dailyRef.current?.difficulty || settings.pace; const grade = reactionGrade(performance.now() - s.cueAt, 3600 * (difficulty === 'slow' ? 1.55 : difficulty === 'challenge' ? .72 : 1)); finish(grade.phrase, `合図から ${grade.seconds}秒！`, grade.points); return; }
-    if (id === 'quiz') { if (button > 2) return; const question = QUIZ[s.round.question]; const answer = s.round.options[button]; const correct = question.answers[question.correct]; const right = answer === correct; finish(right ? 'よく知ってるね！' : 'なるほど、そうなんだ', `答えは「${correct}」。${question.explanation || ''}`, right ? 20 : 0); return; }
+    if (id === 'team') { if (!s.active || button >= settings.players || s.presses.some(x => x.button === button)) return; const at = Date.now(); const position = getMeterPosition(at - s.startAt, dailyRef.current?.difficulty || settings.pace); const presses = [...s.presses, { button, at, position }]; if (presses.length >= settings.players) { const result = teamScore(presses, settings.players); finish(result.points === 100 ? '100点！ ぴったり！' : result.points >= 92 ? 'すごいチーム！' : 'みんなで100点に挑戦！', '中央に近いほど高得点。', result.points); } else setGameState(x => ({ ...x, presses })); return; }
+    if (id === 'light' || id === 'sound') { if (!s.active || s.cueAt == null) { finish(id === 'light' ? 'おっと、まだだったね' : 'おっと、まだ音が鳴っていたね', '合図を待ってみよう。'); return; } const difficulty = dailyRef.current?.difficulty || settings.pace; const grade = reactionGrade(performance.now() - s.cueAt, getGamePacing(difficulty).reactionWindowMs); finish(grade.phrase, `合図から ${grade.seconds}秒！`, grade.points); return; }
+    if (id === 'quiz') { if (button > 1) return; const question = QUIZ[s.round.question]; const answer = s.round.options[button]; const correct = question.answers[question.correct]; const right = answer?.assetId === correct.assetId; finish(right ? 'よく見つけたね！' : '次もゆっくり見てみよう', `答えは「${correct.label}」。${question.explanation || ''}`, right ? 20 : 0); return; }
     if (id === 'red') { const stimulus = s.round.sequence?.[s.redIndex]; if (!stimulus || s.redPressedIndices.includes(s.redIndex)) return; const redPressedIndices = [...s.redPressedIndices, s.redIndex]; const result = redScore(s.round.sequence, redPressedIndices); setGameState(x => ({ ...x, redPressedIndices, redPoints: result.points, redCue: stimulus.left === stimulus.right ? 'そろった！' : 'ちがう色だよ' })); return; }
     if (id === 'count') { const target = s.round.targetCount || 5; const right = s.round.count === target; finish(right ? `${target}個を見つけたね！` : 'もう一度数えてみよう', `押したときは ${s.round.count}個だったよ。`, right ? 16 : 0); return; }
     if (id === 'bigger') { if (button > 1) return; const comparison = s.round.comparison; const right = button === (comparison?.correctIndex ?? (s.round.left > s.round.right ? 0 : 1)); finish(right ? 'そのとおり！' : '次も見てみよう', comparison?.explanation || `${Math.max(s.round.left, s.round.right)} のほうが大きいよ。`, right ? 20 : 0); return; }

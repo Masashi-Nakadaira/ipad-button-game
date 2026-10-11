@@ -1,7 +1,7 @@
 const ANCHORS = {
-  slow: [[15, 13], [63, 53]],
-  normal: [[7, 12], [61, 8], [21, 54], [73, 55]],
-  challenge: [[5, 4], [39, 5], [73, 6], [7, 55], [40, 54], [74, 54]],
+  slow: [[35, 28]],
+  normal: [[15, 13], [63, 53]],
+  challenge: [[7, 12], [61, 8], [39, 54]],
 };
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -20,12 +20,12 @@ function move(card, rng, otherValues) {
   return {
     ...card,
     value: fakeNumber(rng, otherValues),
-    x: clamp(card.anchorX + integer(-7, 7, rng), 3, 76),
-    y: clamp(card.anchorY + integer(-6, 6, rng), 1, 61),
-    size: integer(68, 112, rng),
-    driftX: integer(-16, 16, rng),
-    driftY: integer(-10, 10, rng),
-    duration: integer(5, 9, rng),
+    x: clamp(card.anchorX + integer(-4, 4, rng), 3, 76),
+    y: clamp(card.anchorY + integer(-4, 4, rng), 1, 61),
+    size: integer(88, 116, rng),
+    driftX: integer(-6, 6, rng),
+    driftY: integer(-5, 5, rng),
+    duration: integer(10, 14, rng),
   };
 }
 

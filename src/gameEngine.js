@@ -1,4 +1,5 @@
 import { QUIZ } from './gameData.js';
+import { getGamePacing } from './gamePacing.js';
 
 export const pick = (n, rng = Math.random) => Math.min(n - 1, Math.floor(rng() * n));
 export const shuffle = (items, rng = Math.random) => {
@@ -14,20 +15,20 @@ export const rpsResult = (opponent, instruction, answer) => answer === rpsAnswer
 export const tenGrade = (milliseconds) => {
   const difference = Math.abs(milliseconds - 10000);
   return { seconds: (milliseconds / 1000).toFixed(2), difference: (difference / 1000).toFixed(2),
-    points: Math.max(0, Math.round(100 - difference / 100)),
-    phrase: difference <= 200 ? 'ぴったり！' : difference <= 1000 ? 'おしい！' : 'いい感覚！' };
+    points: Math.max(0, Math.round(100 - difference / 150)),
+    phrase: difference <= 300 ? 'ぴったり！' : difference <= 1500 ? 'おしい！' : 'いい感覚！' };
 };
-export const reactionGrade = (milliseconds, limitMs = 3600) => {
+export const reactionGrade = (milliseconds, limitMs = getGamePacing().reactionWindowMs) => {
   const elapsed = Math.max(0, Math.min(limitMs, milliseconds));
-  const points = elapsed <= 200 ? 20 : Math.max(1, Math.ceil(20 - 19 * (elapsed - 200) / (limitMs - 200)));
+  const points = elapsed <= 500 ? 20 : Math.max(10, Math.ceil(20 - 10 * (elapsed - 500) / (limitMs - 500)));
   return { seconds: (elapsed / 1000).toFixed(2), points,
-    phrase: elapsed <= 200 ? 'すばやい！' : elapsed <= 800 ? 'いい反応！' : 'よくできた！' };
+    phrase: elapsed <= 500 ? 'すばやい！' : elapsed <= 2000 ? 'いい反応！' : 'よくできた！' };
 };
 export const teamScore = (presses, players) => {
   if (presses.length < players) return null;
   const raw = presses.slice(0, players).reduce((sum, x) => {
     const distance = Math.abs(x.position - 0.5);
-    return sum + Math.max(0, 25 - Math.max(0, distance - 0.02) * 60);
+    return sum + Math.max(0, 25 - Math.max(0, distance - 0.06) * 60);
   }, 0);
   return { points: Math.floor(raw * 4 / players + 1e-9), raw: Math.round(raw) };
 };
@@ -62,9 +63,7 @@ export function makeRedSequence({ difficulty = 'normal', rng = Math.random } = {
       const choices = [0, 1, 2, 3].filter(color => color !== previousRight && (matches.has(offset) ? color === left : color !== left));
       const right = choices[pick(choices.length, rng)];
       previousRight = right;
-    const base = difficulty === 'slow' ? 1900 : difficulty === 'challenge' ? 1200 : 1650;
-    const variance = difficulty === 'slow' ? 800 : difficulty === 'challenge' ? 700 : 450;
-      sequence.push({ left, right, durationMs: base + pick(variance, rng) });
+      sequence.push({ left, right, durationMs: getGamePacing(difficulty).stimulusMs + pick(300, rng) });
     }
   }
   return { sequence, matchCount: sequence.filter(stimulus => stimulus.left === stimulus.right).length };
@@ -84,11 +83,8 @@ export function redScore(sequence, pressedIndices = []) {
   return { points: Math.max(0, Math.min(100, points)), matchHits, matchCount, misses, falsePresses };
 }
 
-export function getQuizPool(difficulty = 'normal') {
-  return QUIZ.flatMap((question, index) =>
-    difficulty === 'slow' ? question.difficulty === 'slow' ? [index] : []
-      : difficulty === 'challenge' ? question.difficulty === 'challenge' ? [index] : []
-        : question.difficulty === 'slow' ? [] : [index]);
+export function getQuizPool() {
+  return QUIZ.map((_, index) => index);
 }
 
 export const COMPARISON_KINDS = ['number', 'length', 'weight', 'era', 'date'];
@@ -112,33 +108,30 @@ function makeComparison(options, rng) {
   let low, high, prompt, explanation;
 
   if (kind === 'number') {
-    const base = difficulty === 'slow' ? 25 + pick(45, rng) : difficulty === 'challenge' ? 110 + pick(170, rng) : 65 + pick(90, rng);
-    const gap = difficulty === 'slow' ? 5 + pick(9, rng) : difficulty === 'challenge' ? 1 + pick(4, rng) : 2 + pick(7, rng);
-    const arithmetic = (value, mode) => {
-      const amount = 8 + pick(18, rng);
-      if (difficulty === 'challenge') {
-        const second = 5 + pick(15, rng);
-        return mode === 0 ? `${value - amount + second}＋${amount}－${second}` : `${value + amount - second}－${amount}＋${second}`;
-      }
-      return mode === 0 ? `${value - amount}＋${amount}` : `${value + amount}－${amount}`;
+    const base = difficulty === 'slow' ? 12 + pick(28, rng) : difficulty === 'challenge' ? 45 + pick(55, rng) : 25 + pick(55, rng);
+    const gap = difficulty === 'challenge' ? 4 + pick(8, rng) : 10 + pick(16, rng);
+    const label = (value, expression) => {
+      if (!expression) return String(value);
+      const amount = 5 + pick(8, rng);
+      return pick(2, rng) ? `${value - amount}＋${amount}` : `${value + amount}－${amount}`;
     };
-    const lowMode = pick(2, rng);
-    low = comparisonChoice(arithmetic(base, lowMode), base);
-    high = comparisonChoice(arithmetic(base + gap, 1 - lowMode), base + gap);
-    prompt = direction === 'larger' ? '計算した答えが大きいのは？' : '計算した答えが小さいのは？';
+    const expressionSide = difficulty === 'challenge' ? pick(2, rng) : -1;
+    low = comparisonChoice(label(base, expressionSide === 0), base);
+    high = comparisonChoice(label(base + gap, expressionSide === 1), base + gap);
+    prompt = direction === 'larger' ? '大きい数はどっち？' : '小さい数はどっち？';
     explanation = `${low.label}＝${base}、${high.label}＝${base + gap}。`;
   } else if (kind === 'length') {
-    const useBars = difficulty === 'slow' && pick(2, rng) === 0;
+    const useBars = difficulty !== 'challenge';
     if (useBars) {
-      const short = 42 + pick(19, rng);
-      const gap = 14 + pick(10, rng);
+      const short = 37 + pick(18, rng);
+      const gap = difficulty === 'slow' ? 25 + pick(8, rng) : 20 + pick(8, rng);
       low = comparisonChoice('棒', short, 'bar', short);
       high = comparisonChoice('棒', short + gap, 'bar', short + gap);
       prompt = direction === 'longer' ? '長い棒はどっち？' : '短い棒はどっち？';
       explanation = direction === 'longer' ? '端まで長く伸びている棒が正解。' : '先端が手前で止まる棒が正解。';
     } else {
-      const short = 120 + pick(difficulty === 'challenge' ? 180 : 100, rng);
-      const gap = difficulty === 'slow' ? 10 + pick(12, rng) : difficulty === 'challenge' ? 1 + pick(5, rng) : 3 + pick(9, rng);
+      const short = 120 + pick(90, rng);
+      const gap = 12 + pick(12, rng);
       const format = (cm, style) => {
         if (style === 0) return `${(cm / 100).toFixed(2)}m`;
         if (style === 1) return `${cm}cm`;
@@ -147,18 +140,17 @@ function makeComparison(options, rng) {
         const first = cm - add;
         return `${Math.floor(first / 100)}m${first % 100}cm＋${add}cm`;
       };
-      const expressionSide = pick(2, rng);
       const ordinaryStyle = pick(3, rng);
-      const lowStyle = difficulty === 'challenge' && expressionSide === 0 ? 3 : ordinaryStyle;
-      const highStyle = difficulty === 'challenge' && expressionSide === 1 ? 3 : difficulty === 'normal' ? (ordinaryStyle + 1 + pick(2, rng)) % 3 : pick(3, rng);
+      const lowStyle = ordinaryStyle;
+      const highStyle = (ordinaryStyle + 1 + pick(2, rng)) % 3;
       low = comparisonChoice(format(short, lowStyle), short);
       high = comparisonChoice(format(short + gap, highStyle), short + gap);
-      prompt = direction === 'longer' ? '長さをcmに直して、長いのは？' : '長さをcmに直して、短いのは？';
+      prompt = direction === 'longer' ? '長いのはどっち？' : '短いのはどっち？';
       explanation = `${low.label}＝${short}cm、${high.label}＝${short + gap}cm。`;
     }
   } else if (kind === 'weight') {
-    const light = difficulty === 'slow' ? 400 + pick(45, rng) * 10 : 1100 + pick(140, rng) * 10;
-    const gap = difficulty === 'slow' ? (8 + pick(10, rng)) * 10 : difficulty === 'challenge' ? (1 + pick(3, rng)) * 10 : (2 + pick(7, rng)) * 10;
+    const light = difficulty === 'slow' ? 300 + pick(40, rng) * 10 : difficulty === 'challenge' ? 1100 + pick(80, rng) * 10 : 500 + pick(80, rng) * 10;
+    const gap = difficulty === 'challenge' ? (8 + pick(8, rng)) * 10 : (15 + pick(11, rng)) * 10;
     const format = (grams, style) => {
       if (style === 0) return `${(grams / 1000).toFixed(2)}kg`;
       if (style === 1) return `${grams}g`;
@@ -167,49 +159,53 @@ function makeComparison(options, rng) {
       const first = grams - add;
       return `${Math.floor(first / 1000)}kg${first % 1000}g＋${add}g`;
     };
-    const expressionSide = pick(2, rng);
-    const ordinaryStyle = difficulty === 'slow' ? pick(2, rng) + 1 : pick(3, rng);
-    const lowStyle = difficulty === 'challenge' && expressionSide === 0 ? 3 : ordinaryStyle;
-    const highStyle = difficulty === 'challenge' && expressionSide === 1 ? 3 : difficulty === 'normal' ? (ordinaryStyle + 1 + pick(2, rng)) % 3 : difficulty === 'slow' ? pick(2, rng) + 1 : pick(3, rng);
+    const ordinaryStyle = difficulty === 'challenge' ? pick(3, rng) : 1;
+    const lowStyle = ordinaryStyle;
+    const highStyle = difficulty === 'challenge' ? (ordinaryStyle + 1 + pick(2, rng)) % 3 : 1;
     low = comparisonChoice(format(light, lowStyle), light);
     high = comparisonChoice(format(light + gap, highStyle), light + gap);
-    prompt = direction === 'heavier' ? '重さをgに直して、重いのは？' : '重さをgに直して、軽いのは？';
+    prompt = direction === 'heavier' ? '重いのはどっち？' : '軽いのはどっち？';
     explanation = `${low.label}＝${light}g、${high.label}＝${light + gap}g。`;
   } else if (kind === 'era') {
-    const sameEra = difficulty === 'slow' || difficulty === 'normal' && pick(3, rng) === 0;
+    const sameEra = difficulty !== 'challenge' && pick(2, rng) === 0;
     if (sameEra) {
       const heisei = pick(2, rng) === 1;
       const era = heisei ? '平成' : '昭和';
       const firstYear = heisei ? 5 + pick(15, rng) : 25 + pick(22, rng);
-      const gap = difficulty === 'slow' ? 3 + pick(7, rng) : 1 + pick(4, rng);
+      const gap = 4 + pick(7, rng);
       const offset = heisei ? 1988 : 1925;
       low = comparisonChoice(`${era}${firstYear}年`, offset + firstYear);
       high = comparisonChoice(`${era}${firstYear + gap}年`, offset + firstYear + gap);
       explanation = `${low.label}は${offset + firstYear}年、${high.label}は${offset + firstYear + gap}年。`;
     } else {
-      const heisei = pick(2, rng) === 1;
-      const era = heisei ? '平成' : '昭和';
-      const year = heisei ? 6 + pick(17, rng) : 27 + pick(28, rng);
-      const converted = year + (heisei ? 1988 : 1925);
-      const added = difficulty === 'challenge' ? 2 + pick(4, rng) : 0;
-      const japaneseYear = converted + added;
-      const gap = 1 + pick(difficulty === 'challenge' ? 3 : 6, rng);
-      const westernYear = japaneseYear + (pick(2, rng) ? gap : -gap);
-      const japanese = comparisonChoice(added ? `${era}${year}年の${added}年後` : `${era}${year}年`, japaneseYear);
-      const western = comparisonChoice(`西暦${westernYear}年`, westernYear);
-      [low, high] = japaneseYear < westernYear ? [japanese, western] : [western, japanese];
-      explanation = `${japanese.label}＝西暦${japaneseYear}年、${western.label}＝${westernYear}年。`;
+      if (difficulty !== 'challenge') {
+        const showa = 30 + pick(25, rng), heisei = 5 + pick(20, rng);
+        low = comparisonChoice(`昭和${showa}年`, 1925 + showa);
+        high = comparisonChoice(`平成${heisei}年`, 1988 + heisei);
+        explanation = `${low.label}が先、${high.label}が後。`;
+      } else {
+        const heisei = pick(2, rng) === 1;
+        const era = heisei ? '平成' : '昭和';
+        const year = heisei ? 6 + pick(17, rng) : 27 + pick(28, rng);
+        const japaneseYear = year + (heisei ? 1988 : 1925);
+        const gap = 5 + pick(6, rng);
+        const westernYear = japaneseYear + (pick(2, rng) ? gap : -gap);
+        const japanese = comparisonChoice(`${era}${year}年`, japaneseYear);
+        const western = comparisonChoice(`西暦${westernYear}年`, westernYear);
+        [low, high] = japaneseYear < westernYear ? [japanese, western] : [western, japanese];
+        explanation = `${japanese.label}＝西暦${japaneseYear}年、${western.label}＝${westernYear}年。`;
+      }
     }
     prompt = direction === 'older' ? 'より古い年はどっち？' : 'より新しい年はどっち？';
   } else {
     const useTime = difficulty !== 'slow' || pick(2, rng) === 0;
     if (useTime) {
-      const hour = 8 + pick(9, rng), minute = 5 + pick(36, rng);
-      const gap = difficulty === 'slow' ? 12 + pick(14, rng) : difficulty === 'challenge' ? 1 + pick(5, rng) : 3 + pick(9, rng);
+      const hour = 8 + pick(8, rng), minute = 15 * pick(4, rng);
+      const gap = difficulty === 'challenge' ? 15 + 15 * pick(2, rng) : 30 + 15 * pick(2, rng);
       const format = total => `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
       const first = hour * 60 + minute;
       const timeExpression = (total, mode) => {
-        const amount = difficulty === 'challenge' ? 60 + (10 + pick(36, rng)) : 10 + pick(31, rng);
+        const amount = 15 + 15 * pick(2, rng);
         const starting = mode === 0 ? total - amount : total + amount;
         const interval = amount >= 60 ? `1時間${amount - 60}分` : `${amount}分`;
         return `${format(starting)}から${interval}${mode === 0 ? '後' : '前'}`;
@@ -218,16 +214,15 @@ function makeComparison(options, rng) {
         low = comparisonChoice(format(first), first);
         high = comparisonChoice(format(first + gap), first + gap);
       } else if (difficulty === 'challenge') {
-        const lowMode = pick(2, rng);
-        low = comparisonChoice(timeExpression(first, lowMode), first);
-        high = comparisonChoice(timeExpression(first + gap, 1 - lowMode), first + gap);
-      } else {
         const expressionSide = pick(2, rng);
         const mode = pick(2, rng);
         low = comparisonChoice(expressionSide === 0 ? timeExpression(first, mode) : format(first), first);
         high = comparisonChoice(expressionSide === 1 ? timeExpression(first + gap, mode) : format(first + gap), first + gap);
+      } else {
+        low = comparisonChoice(format(first), first);
+        high = comparisonChoice(format(first + gap), first + gap);
       }
-      prompt = direction === 'earlier' ? '計算して早い時刻は？' : '計算して遅い時刻は？';
+      prompt = direction === 'earlier' ? '早い時刻はどっち？' : '遅い時刻はどっち？';
       explanation = `${low.label}＝${format(first)}、${high.label}＝${format(first + gap)}。`;
     } else {
       const month = 1 + pick(10, rng), day = 3 + pick(17, rng);
@@ -247,11 +242,11 @@ function makeComparison(options, rng) {
 
 function memorySequence(options, rng) {
   const index = Math.max(0, Math.min(3, options.index ?? 0));
-  const base = options.difficulty === 'slow' ? 1 : options.difficulty === 'challenge' ? 3 : 2;
+  const lengths = options.difficulty === 'challenge' ? [2, 2, 3, 3] : options.difficulty === 'slow' ? [1, 2, 2, 3] : [1, 2, 3, 3];
   const sequence = [pick(4, rng)];
-  while (sequence.length < base + index) sequence.push((sequence.at(-1) + 1 + pick(3, rng)) % 4);
+  while (sequence.length < lengths[index]) sequence.push((sequence.at(-1) + 1 + pick(3, rng)) % 4);
   const previous = options.sequence ?? options.previousSequence;
-  if (previous?.length && previous.every((color, i) => sequence[i] === color)) {
+  if (previous?.length && previous.length <= sequence.length && previous.every((color, i) => sequence[i] === color)) {
     const alternatives = [0, 1, 2, 3].filter(color => color !== previous[0] && color !== sequence[1]);
     sequence[0] = alternatives[pick(alternatives.length, rng)];
   }
@@ -263,8 +258,8 @@ const COUNT_OBJECTS = [
   { name: '花', emoji: '🌼' }, { name: '鳥', emoji: '🐦' }
 ];
 function makeCountRound(difficulty, rng) {
-  const targetCount = difficulty === 'slow' ? 4 + pick(2, rng) : difficulty === 'challenge' ? 5 + pick(3, rng) : 4 + pick(4, rng);
-  const dummyCount = difficulty === 'slow' ? 4 : difficulty === 'challenge' ? 6 + pick(2, rng) : 4 + pick(4, rng);
+  const targetCount = difficulty === 'slow' ? 2 + pick(2, rng) : difficulty === 'challenge' ? 4 + pick(2, rng) : 3 + pick(2, rng);
+  const dummyCount = difficulty === 'slow' ? 1 + pick(2, rng) : difficulty === 'challenge' ? 3 + pick(2, rng) : 2 + pick(2, rng);
   const target = pick(COUNT_OBJECTS.length, rng);
   const distractors = COUNT_OBJECTS.filter((_, index) => index !== target);
   const events = shuffle([
@@ -288,14 +283,14 @@ export const newRound = (id, options = {}) => {
   const difficulty = options.difficulty ?? 'normal';
   if (id === 'rps') {
     const mode = options.rpsMode ?? 'random';
-    const prompts = difficulty === 'challenge' ? ['勝って', '負けて', 'あいこで'] : ['勝って', '負けて'];
+    const prompts = difficulty === 'challenge' ? ['勝って', '負けて', 'あいこで'] : difficulty === 'slow' ? ['勝って', '勝って', '勝って', '負けて'] : ['勝って', '勝って', '負けて'];
     return { opponent: pick(3, rng), instruction: mode === 'win' ? '勝って' : mode === 'lose' ? '負けて' : prompts[pick(prompts.length, rng)] };
   }
   if (id === 'light') {
-    const delay = difficulty === 'slow' ? 2200 + pick(1700, rng) : difficulty === 'challenge' ? 1100 + pick(2100, rng) : 1500 + pick(1800, rng);
-    return { target: 3, delay, feintCount: difficulty === 'slow' ? 1 : difficulty === 'challenge' ? 2 + pick(2, rng) : 1 + pick(2, rng) };
+    const delay = getGamePacing(difficulty).stimulusMs + pick(1000, rng);
+    return { target: 3, delay, feintCount: 0 };
   }
-  if (id === 'sound') return { delay: (difficulty === 'slow' ? 3300 : difficulty === 'challenge' ? 1800 : 2600) + pick(1800, rng) };
+  if (id === 'sound') return { delay: getGamePacing(difficulty).stimulusMs * 2 + pick(1000, rng) };
   if (id === 'red') return makeRedSequence({ difficulty, rng });
   if (id === 'count') return makeCountRound(difficulty, rng);
   if (id === 'bigger') {

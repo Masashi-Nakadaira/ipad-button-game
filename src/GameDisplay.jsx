@@ -1,5 +1,6 @@
 import React from 'react';
 import { COLORS, QUIZ } from './gameData.js';
+import NatureArt from './NatureArt.jsx';
 
 const HANDS = ['グー', 'チョキ', 'パー'];
 const HAND_EMOJI = ['✊', '✌️', '✋'];
@@ -33,9 +34,9 @@ function ComparisonVisual({ visual }) {
 function TenScene({ cards }) {
   return <div className="ten-scene" aria-hidden="true">{cards.map(card => <span key={card.id} className={`ten-float ten-tone-${card.tone}`} style={{ '--x': `${card.x}%`, '--y': `${card.y}%`, '--size': `${card.size}px`, '--font-size': `${Math.round(card.size * .45)}px`, '--drift-x': `${card.driftX}px`, '--drift-y': `${card.driftY}px`, '--float-duration': `${card.duration}s` }}>{card.value}</span>)}</div>;
 }
-function ChoicePanel({ game, round, press }) {
+function ChoicePanel({ game, round, press, zoomStage = 0 }) {
   if (game.id === 'rps') return <div className="answer-grid three">{HANDS.map((hand, i) => <PhysicalChoice key={i} button={i} title={<span className="answer-title">{hand}</span>} visual={<span className="hand-choice" aria-hidden="true">{HAND_EMOJI[i]}</span>} onClick={press}/>)}</div>;
-  if (game.id === 'quiz') return <div className="answer-grid three">{round.options?.map((option, i) => <PhysicalChoice key={i} button={i} title={<span className="answer-title quiz-title">{option}</span>} onClick={press}/>)}</div>;
+  if (game.id === 'quiz') return <div className="answer-grid two nature-grid">{round.options?.map((option, i) => <button key={`${option.assetId}-${i}`} className={`answer-card nature-answer zoom-stage-${zoomStage}`} style={{ '--answer-color': COLORS[i].hex }} aria-label={`${i === 0 ? '左' : '右'}の絵、${COLORS[i].name}ボタン`} onClick={() => press(i)}><span className="nature-window"><NatureArt assetId={option.assetId}/></span><span className="choice-color-name">{i === 0 ? '左' : '右'}・{COLORS[i].name}ボタン</span></button>)}</div>;
   if (game.id === 'bigger') return <div className="answer-grid two">{(round.comparison?.choices || []).map((choice, i) => <PhysicalChoice key={i} button={i} title={choice.visual?.type === 'bar' ? <span className="answer-title">{choice.label}</span> : null} visual={<ComparisonVisual visual={choice.visual}/>} onClick={press}/>)}</div>;
   return null;
 }
@@ -57,9 +58,12 @@ export default function GameDisplay({ game, state, settings, press, start, next,
   if (phase === 'intro') {
     prompt = game.id === 'ten' ? '心の中で、10秒。' : game.title;
     detail = game.id === 'ten' ? '動く数字に惑わされず、10秒と思ったら押してね。' : game.id === 'team' ? `${settings.players}人で遊びます。赤から順に一人ずつ色を担当してね。` : game.guide;
+  } else if (phase === 'countdown') {
+    prompt = <span className="countdown-number">{state.countdown}</span>;
+    detail = game.id === 'ten' ? '「1」の次から、心の中で10秒を数えてね。' : 'もうすぐ始まるよ。ボタンはまだ押さないでね。';
   } else if (phase === 'preparing') {
     prompt = state.prepCount ? String(state.prepCount) : '説明をきいてね';
-    detail = state.prepCount ? 'もうすぐ始まります。合図まで待ってね。' : '「スタート」の声が終わったら計測が始まります。';
+    detail = '説明が終わると、3・2・1の合図が出ます。';
   } else if (phase === 'paused') {
     prompt = '一時停止中';
     detail = state.pausedFrom === 'feedback' ? 'つづけると、次のお題に進みます。' : game.id === 'red' ? 'つづけると、このゲームを最初から始めます。' : 'つづけると、今の問題を準備から始めます。';
@@ -70,7 +74,7 @@ export default function GameDisplay({ game, state, settings, press, start, next,
       case 'team': prompt = active ? '真ん中で、ポン！' : '合図を待ってね…'; detail = `${presses.length} / ${settings.players} 人が押しました`; badge = `一人25点、合計を100点に換算　${COLORS.slice(0, settings.players).map((color, i) => `${i + 1}人目：${color.name}`).join('　')}`; break;
       case 'light': prompt = active ? 'いまだ！' : round.feint ? 'まだだよ…' : 'よーく見て…'; detail = active ? 'どのボタンでも押そう' : '本当の合図を待ってね。'; break;
       case 'sound': prompt = active ? '音が止まった！' : '音をきいてね…'; detail = active ? '今、押そう！' : '画面にも合図が出ます。'; break;
-      case 'quiz': prompt = QUIZ[round.question]?.q || ''; detail = '答えをひとつ選ぼう。'; break;
+      case 'quiz': prompt = QUIZ[round.question]?.q || ''; detail = ['よく見てね。少しずつ全体が見えます。', '少し見えてきたよ。', '全体を見て選ぼう。'][state.zoomStage || 0]; break;
       case 'red': prompt = '同じ色なら、ポン！'; detail = ''; break;
       case 'count': prompt = `${round.item}だけ数えよう`; detail = `${targetCount}個になったらポン！`; break;
       case 'bigger': prompt = round.comparison?.prompt || 'くらべて選ぼう！'; detail = '左は赤、右は青。'; break;
@@ -86,7 +90,7 @@ export default function GameDisplay({ game, state, settings, press, start, next,
   return <main className="play-page">
     <header className="play-header"><button className="back-button" onClick={back}>← あそびを選ぶ</button><div className="brand"><ColorDots/><b>ボタンゲーム</b></div>{!(daily && phase === 'summary') && <button className="text-control" onClick={restart}>やり直し</button>}</header>
     <div className="play-top"><span className="game-name">{game.title}{daily && <small className="daily-step-label">本日の {daily.position + 1} / 3 ゲーム</small>}</span><span className="round-count">{phase === 'summary' ? 'おしまい' : game.id === 'red' ? `${(state.redIndex || 0) + 1} / 24 色` : `${index + 1} / ${total} 回`}</span></div>
-    <section className={`play-stage ${phase} tone-${game.tone} ${hasInlineChoices ? 'choice-stage' : ''} ${game.id === 'red' ? 'red-stage' : ''} ${game.id === 'ten' ? 'ten-stage' : ''}`} aria-live="polite"><div className="stage-main">
+    <section className={`play-stage ${phase} tone-${game.tone} ${hasInlineChoices ? 'choice-stage' : ''} ${game.id === 'red' ? 'red-stage' : ''} ${game.id === 'ten' ? 'ten-stage' : ''} ${game.id === 'count' ? 'count-stage' : ''}`} aria-live="polite"><div className="stage-main">
       {game.id === 'ten' && phase === 'intro' && <div className="intro-clock"><ClockIcon/></div>}
       {game.id === 'ten' && isPlaying && <TenScene cards={state.tenCards || []}/>}
       {game.id === 'light' && isPlaying && (active || round.feint) && <span className={`stage-color ${round.feint && !active ? 'feint' : ''}`} style={{ background: active ? '#39b463' : '#f0b82c' }}/ >}
@@ -98,15 +102,15 @@ export default function GameDisplay({ game, state, settings, press, start, next,
       {phase === 'summary' && <div className="summary-score">{daily ? normalizedScore : score}<small>{daily ? ' / 100点' : 'ポイント'}</small></div>}
       <h1>{prompt}</h1><p>{detail}</p>
       {badge && <div className="instruction-badge">{badge}</div>}
-      {hasInlineChoices && <ChoicePanel game={game} round={round} press={press}/>}
+      {hasInlineChoices && <ChoicePanel game={game} round={round} press={press} zoomStage={state.zoomStage}/>}
       {phase === 'feedback' && feedback?.points !== undefined && <div className="feedback-points">+{feedback.points} ポイント</div>}
     </div></section>
     <section className={`input-panel ${hasInlineChoices ? 'compact-input' : ''} ${game.id === 'red' ? 'red-input' : ''}`}>
       {phase === 'intro' || phase === 'summary' || phase === 'paused' || (phase === 'feedback' && !automaticFeedback) ? <>
         <div className="input-heading">{phase === 'intro' ? 'はじめる' : phase === 'summary' ? daily ? daily.position === 2 ? '本日の結果へ' : '次のゲームへ' : 'もう一回' : phase === 'paused' ? '準備ができたら' : '次へ進む'}</div>
         <button className="wide-action" onClick={phase === 'intro' ? start : phase === 'summary' ? daily ? onDailyNext : replay : phase === 'paused' ? resume : next}>{phase === 'intro' ? 'スタート' : phase === 'summary' ? daily ? daily.position === 2 ? '本日の結果へ' : '次のゲームへ' : 'もう一回あそぶ' : phase === 'paused' ? 'つづける' : index + 1 >= total ? '結果を見る' : game.id === 'ten' ? '次の10秒をはじめる' : '次の問題'} <Arrow/></button>
-      </> : phase === 'preparing' ? <><div className="watch-note">計測前です。ボタンはまだ押さないでね。</div>{settings.sound && state.showTenFallback && !state.prepCount && <button className="small-action ten-visual-start" onClick={startVisualTen}>音声が終わらないときは画面の合図で始める</button>}</> : automaticFeedback ? <div className="auto-next" role="status">{index + 1 >= total ? '結果' : '次のお題'}まで {state.feedbackRemaining} 秒 <span className="auto-next-bar"/></div> : phase === 'watch' ? <div className="watch-note">光る順番を見よう</div> : hasInlineChoices ? <p className="input-note">選択肢か、同じ色の物理ボタンを押してください。</p> : SINGLE_BUTTON_GAMES.has(game.id) ? <><div className="input-heading">ボタンを押そう</div><button className="wide-action one-press" onClick={() => press(0)}>ポン！</button></> : <><div className="input-heading">色のボタンを押そう</div><div className="play-buttons">{COLORS.map((color, i) => <BottomButton key={i} button={i} label={color.name} onClick={() => press(i)} disabled={!isPlaying || (game.id === 'team' && i >= settings.players)} selected={game.id === 'team' && presses.some(hit => hit.button === i)}/>)}</div></>}
-      {!hasInlineChoices && !['feedback','preparing'].includes(phase) && <p className="input-note">画面のボタンでも、つながったボタンでも遊べます。</p>}
+      </> : phase === 'countdown' ? <div className="watch-note">数字が終わってから押そう</div> : phase === 'preparing' ? <><div className="watch-note">計測前です。ボタンはまだ押さないでね。</div>{settings.sound && state.showTenFallback && !state.prepCount && <button className="small-action ten-visual-start" onClick={startVisualTen}>音声が終わらないときは画面の合図で始める</button>}</> : automaticFeedback ? <div className="auto-next" role="status">{index + 1 >= total ? '結果' : '次のお題'}まで {state.feedbackRemaining} 秒 <span className="auto-next-bar"/></div> : phase === 'watch' ? <div className="watch-note">光る順番を見よう</div> : hasInlineChoices ? <p className="input-note">選択肢か、同じ色の物理ボタンを押してください。</p> : SINGLE_BUTTON_GAMES.has(game.id) ? <><div className="input-heading">ボタンを押そう</div><button className="wide-action one-press" onClick={() => press(0)}>ポン！</button></> : <><div className="input-heading">色のボタンを押そう</div><div className="play-buttons">{COLORS.map((color, i) => <BottomButton key={i} button={i} label={color.name} onClick={() => press(i)} disabled={!isPlaying || (game.id === 'team' && i >= settings.players)} selected={game.id === 'team' && presses.some(hit => hit.button === i)}/>)}</div></>}
+      {!hasInlineChoices && !['feedback','preparing','countdown'].includes(phase) && <p className="input-note">画面のボタンでも、つながったボタンでも遊べます。</p>}
     </section>
   </main>;
 }

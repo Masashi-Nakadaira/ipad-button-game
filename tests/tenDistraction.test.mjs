@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { changeTenDistractor, createTenDistractors } from '../src/tenDistraction.js';
 
 test('distraction count grows with difficulty without real-clock numbers', () => {
-  const expected = { slow: 2, normal: 4, challenge: 6 };
+  const expected = { slow: 1, normal: 2, challenge: 3 };
   for (const [difficulty, count] of Object.entries(expected)) {
     const cards = createTenDistractors(difficulty, () => 0.42);
     assert.equal(cards.length, count);
@@ -13,6 +13,7 @@ test('distraction count grows with difficulty without real-clock numbers', () =>
       assert.notEqual(card.value, 10);
       assert.ok(card.x >= 3 && card.x <= 76);
       assert.ok(card.y >= 1 && card.y <= 61);
+      assert.ok(card.size >= 88 && card.duration >= 10);
     });
   }
 });
